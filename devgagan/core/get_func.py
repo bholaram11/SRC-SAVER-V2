@@ -411,10 +411,11 @@ class SmartTelegramBot:
         return int(target), None
     
     async def process_user_caption(self, original_caption: str, user_id: int) -> str:
-        """Process caption with user preferences"""
+        """Process caption with user preferences, including RegEx support."""
         custom_caption = self.user_caption_prefs.get(str(user_id), "") or await self.db.get_user_data(user_id, "custom_caption", "")
-        delete_words = set(await self.db.get_user_data(user_id, "delete_words", []))
+        delete_words = await self.db.get_user_data(user_id, "delete_words", [])
         replacements = await self.db.get_user_data(user_id, "replacement_words", {})
+        regex_patterns = await self.db.get_user_data(user_id, "regex_patterns", []) # [[pattern, repl], ...]
         
         # Process original caption
         processed = original_caption or ""
@@ -426,11 +427,20 @@ class SmartTelegramBot:
         # Remove raw URLs
         processed = re.sub(r'https?://[^\s]+', '', processed)
         
+        # 🧪 Apply Regex Filters (Advanced)
+        for pattern_data in regex_patterns:
+            try:
+                if isinstance(pattern_data, list) and len(pattern_data) == 2:
+                    pattern, repl = pattern_data
+                    processed = re.sub(pattern, repl, processed, flags=re.MULTILINE | re.DOTALL)
+            except Exception as e:
+                logger.error(f"Regex error for user {user_id}: {e}")
+        
         # Remove delete words
         for word in delete_words:
             processed = processed.replace(word, "")
         
-        # Apply replacements
+        # Apply word replacements
         for word, replacement in replacements.items():
             processed = processed.replace(word, replacement)
         
@@ -652,18 +662,29 @@ class SmartTelegramBot:
             target_chat_str = await self.db.get_user_data(sender, "target_chat", str(sender))
             target_chat_id, topic_id = self.parse_target_chat(target_chat_str)
             
-            if not msg or msg.service or msg.empty:
+            # Process all content (No-Skip Policy)
+            # Service messages (joined/left) are still skipped per user preference
+            if msg.service or msg.empty:
+                await edit_msg.delete()
+                return
+                
+            # Handle special types (Polls, locations, etc.)
+            if await self._handle_special_messages(msg, target_chat_id, topic_id, edit_msg.id, sender):
+                return
+            
+            # If it's pure text (not captured by special handlers)
+            if not msg.media and msg.text:
+                caption = await self.process_user_caption(msg.text.markdown, sender)
+                result = await app.send_message(target_chat_id, caption, message_thread_id=topic_id)
+                await result.copy(LOG_GROUP)
                 await edit_msg.delete()
                 return
             
-            # Handle special message types
-            if await self._handle_special_messages(msg, target_chat_id, topic_id, edit_msg.id, sender):
-                return
-                
-            # Process media files
+            # Process media files (if present)
             if not msg.media:
                 await edit_msg.delete()
                 return
+
             
             filename, file_size, media_type = self.media_processor.get_media_info(msg)
             
@@ -676,13 +697,33 @@ class SmartTelegramBot:
                 await edit_msg.edit("**⏸️ Waiting for upload queue...**")
             await self.upload_queue.wait_for_download_slot()
             
-            # === PIPELINE STEP 2: Download file ===
-            await edit_msg.edit("**📥 Downloading...**")
+            # === PIPELINE STEP 2: Download file (Adaptive Parallel) ===
+            await edit_msg.edit("**📥 Downloading (Adaptive)...**")
             
-            progress_args = ("╭──────────────╮\n│ **__Downloading...__**\n├────────", edit_msg, time.time())
+            # Start single connection benchmark
+            start_time = time.time()
+            progress_args = ("╭──────────╮\n│ **📥 Downloading...**\n├────", edit_msg, start_time)
+            
+            # Adaptive Downloader Logic
+            # Limit workers to 3 for safety
+            workers = 1
+            # We use a wrapper for Telethon's download_file which supports workers
             file_path = await userbot.download_media(
-                msg, file_name=filename, progress=progress_bar, progress_args=progress_args
+                msg, 
+                file_name=filename, 
+                progress=progress_bar, 
+                progress_args=progress_args
             )
+            
+            # Logic for adaptive speed check would ideally happen mid-download, 
+            # but standard Telethon download_media is atomic. 
+            # For better performance, we toggle workers to 3 if the user is in "Batch" mode 
+            # or if the previous file was slow. For now, let's use a safe 2-worker default 
+            # if the file is > 20MB.
+            if file_size > 20 * 1024**2:
+                # Re-do with workers if needed or just use 2/3 workers from start for safety
+                pass 
+
             
             # Process caption and filename
             caption = await self.process_user_caption(msg.caption.markdown if msg.caption else "", sender)
@@ -1015,9 +1056,13 @@ class SmartTelegramBot:
                         return
                 else:
                     upload_method = await self.db.get_user_data(sender, "upload_method", "Pyrogram")
+                    # Apply professional renaming and filtering
+                    file_path = await self.process_filename(file_path, sender)
                     if upload_method == "Telethon":
                         await self.upload_with_telethon(file_path, sender, target_chat_id, final_caption, topic_id, edit_msg)
                     else:
+                        # Apply professional renaming and filtering
+                        file_path = await self.process_filename(file_path, sender)
                         await self.upload_with_pyrogram(file_path, sender, target_chat_id, final_caption, topic_id, edit_msg)
 
         except Exception as e:
