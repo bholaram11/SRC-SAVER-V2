@@ -1,16 +1,13 @@
 # ---------------------------------------------------
 # File Name: get_func.py
-# Description: A Pyrogram bot for downloading files from Telegram channels or groups 
-#              and uploading them back to Telegram.
-# Author: Gagan
-# GitHub: https://github.com/devgaganin/
-# Telegram: https://t.me/team_spy_pro
-# YouTube: https://youtube.com/@dev_gagan
-# Created: 2025-01-11
-# Last Modified: 2025-01-11
-# Version: 2.0.5
-# License: MIT License
+# Description: Elite "No-Skip" Media Processor & Adaptive Downloader.
+#              This module handles the core "Elite" features:
+#              - 🔄 Adaptive Parallel Downloading (2-3 workers if slow)
+#              - 🚫 No-Skip Content Policy (Text, Polls, Media)
+#              - 🔍 Regex-based Caption & Filename Filtering
+#              - 🧪 Pro Userbot (4GB) Integration
 # ---------------------------------------------------
+
 
 import asyncio
 import os
@@ -403,12 +400,19 @@ class SmartTelegramBot:
         thumb_path = f'{user_id}.jpg'
         return thumb_path if os.path.exists(thumb_path) else None
     
-    def parse_target_chat(self, target: str) -> Tuple[int, Optional[int]]:
-        """Parse chat ID and topic ID from target string"""
-        if '/' in target:
-            parts = target.split('/')
-            return int(parts[0]), int(parts[1])
-        return int(target), None
+    def parse_target_chat(self, target: str, user_id: int) -> Tuple[int, Optional[int]]:
+        """Parse chat ID and topic ID from target string, falling back to user_id if needed"""
+        if not target or target in ["Personal Chat (DM)", "Not Set"]:
+            return user_id, None
+        
+        try:
+            if '/' in target:
+                parts = target.split('/')
+                return int(parts[0]), int(parts[1])
+            return int(target), None
+        except (ValueError, IndexError):
+            return user_id, None
+
     
     async def process_user_caption(self, original_caption: str, user_id: int) -> str:
         """Process caption with user preferences, including RegEx support."""
@@ -608,7 +612,8 @@ class SmartTelegramBot:
         await edit_msg.edit('**✅ 4GB upload starting...**')
         
         target_chat_str = await self.db.get_user_data(sender, "target_chat", str(sender))
-        target_chat_id, topic_id = self.parse_target_chat(target_chat_str)
+        target_chat_id, topic_id = self.parse_target_chat(target_chat_str, user_id)
+
         
         file_type = self.media_processor.get_file_type(file_path)
         thumb_path = self.get_thumbnail_path(sender)
@@ -654,13 +659,20 @@ class SmartTelegramBot:
             await edit_msg.delete()
 
     async def _process_message(self, userbot, msg: Message, sender: int, edit_msg: Message):
-        """Processes a fetched message with ordered concurrent upload pipeline."""
+        """
+        🚀 ELITE CORE: Processes a fetched message with the high-performance pipeline.
+        - Supports ordered concurrent uploads (Sequence Preservation).
+        - No-Skip Policy: Captures Text, Polls, Media, and Links.
+        - Skips only Service Messages (Joined/Left/Pinned).
+        """
         file_path = None
         order = None
+
         try:
             # Get target chat configuration
             target_chat_str = await self.db.get_user_data(sender, "target_chat", str(sender))
-            target_chat_id, topic_id = self.parse_target_chat(target_chat_str)
+            target_chat_id, topic_id = self.parse_target_chat(target_chat_str, sender)
+
             
             # Process all content (No-Skip Policy)
             # Service messages (joined/left) are still skipped per user preference
@@ -986,7 +998,8 @@ class SmartTelegramBot:
     async def _copy_public_message(self, app_client, userbot, sender: int, chat_id: str, message_id: int, edit_id: int):
         """Handle copying from public channels/groups"""
         target_chat_str = await self.db.get_user_data(sender, "target_chat", str(sender))
-        target_chat_id, topic_id = self.parse_target_chat(target_chat_str)
+        target_chat_id, topic_id = self.parse_target_chat(target_chat_str, sender)
+
         file_path = None
         
         try:
@@ -1115,230 +1128,13 @@ class SmartTelegramBot:
 # Initialize the main bot instance
 telegram_bot = SmartTelegramBot()
 
-# Event Handlers
-@gf.on(events.NewMessage(incoming=True, pattern='/settings'))
-async def settings_command_handler(event):
-    """Handle /settings command"""
-    await telegram_bot.send_settings_panel(event.chat_id, event.sender_id)
-
-@gf.on(events.CallbackQuery)
-async def callback_query_handler(event):
-    """Enhanced callback query handler with all features"""
-    user_id = event.sender_id
-    data = event.data
-    
-    # Upload method selection
-    if data == b'uploadmethod':
-        current_method = await telegram_bot.db.get_user_data(user_id, "upload_method", "Pyrogram")
-        pyro_check = " ✅" if current_method == "Pyrogram" else ""
-        tele_check = " ✅" if current_method == "Telethon" else ""
-        
-        buttons = [
-            [Button.inline(f"Pyrogram v2{pyro_check}", b'pyrogram')],
-            [Button.inline(f"SpyLib v1 ⚡{tele_check}", b'telethon')]
-        ]
-        await event.edit(
-            "📤 **Choose Upload Method:**\n\n"
-            "**Pyrogram v2:** Standard, reliable uploads\n"
-            "**SpyLib v1 ⚡:** Advanced features, beta version\n\n"
-            "**Note:** SpyLib is built on Telethon and offers enhanced capabilities.",
-            buttons=buttons
-        )
-
-    elif data == b'pyrogram':
-        await telegram_bot.db.save_user_data(user_id, "upload_method", "Pyrogram")
-        await event.edit("✅ Upload method set to **Pyrogram v2**")
-
-    elif data == b'telethon':
-        await telegram_bot.db.save_user_data(user_id, "upload_method", "Telethon")
-        await event.edit("✅ Upload method set to **SpyLib v1 ⚡**\n\nThanks for helping us test this advanced library!")
-
-    # Session management
-    elif data == b'logout':
-        await odb.remove_session(user_id)
-        user_data = await odb.get_data(user_id)
-        message = "✅ Logged out successfully!" if user_data and user_data.get("session") is None else "❌ You are not logged in."
-        await event.respond(message)
-
-    elif data == b'addsession':
-        telegram_bot.user_sessions[user_id] = 'addsession'
-        await event.respond("🔑 **Session Login**\n\nSend your Pyrogram V2 session string:")
-
-    # Settings configuration
-    elif data == b'setchat':
-        telegram_bot.user_sessions[user_id] = 'setchat'
-        await event.respond("💬 **Set Target Chat**\n\nSend the chat ID where files should be sent:")
-
-    elif data == b'setrename':
-        telegram_bot.user_sessions[user_id] = 'setrename'
-        await event.respond("🏷 **Set Rename Tag**\n\nSend the tag to append to filenames:")
-
-    elif data == b'setcaption':
-        telegram_bot.user_sessions[user_id] = 'setcaption'
-        await event.respond("📝 **Set Custom Caption**\n\nSend the caption to add to all files:")
-
-    elif data == b'setreplacement':
-        telegram_bot.user_sessions[user_id] = 'setreplacement'
-        await event.respond(
-            "🔄 **Word Replacement**\n\n"
-            "Send replacement rules in format:\n"
-            "`'OLD_WORD' 'NEW_WORD'`\n\n"
-            "Example: `'sample' 'example'`"
-        )
-
-    elif data == b'delete':
-        telegram_bot.user_sessions[user_id] = 'deleteword'
-        await event.respond(
-            "🗑 **Delete Words**\n\n"
-            "Send words separated by spaces to remove them from captions/filenames:"
-        )
-
-    # Thumbnail management
-    elif data == b'setthumb':
-        telegram_bot.pending_photos.add(user_id)
-        await event.respond("🖼 **Set Thumbnail**\n\nSend a photo to use as thumbnail for videos:")
-
-    elif data == b'remthumb':
-        thumb_path = f'{user_id}.jpg'
-        if os.path.exists(thumb_path):
-            os.remove(thumb_path)
-            await event.respond('✅ Thumbnail removed successfully!')
-        else:
-            await event.respond("❌ No thumbnail found to remove.")
-
-    # Watermark features (placeholder)
-    elif data == b'pdfwt':
-        await event.respond("🚧 **PDF Watermark**\n\nThis feature is under development...")
-
-    elif data == b'watermark':
-        await event.respond("🚧 **Video Watermark**\n\nThis feature is under development...")
-
-    # Reset all settings
-    elif data == b'reset':
-        try:
-            success = await telegram_bot.db.reset_user_data(user_id)
-            telegram_bot.db.clear_user_cache(user_id)
-            telegram_bot.user_rename_prefs.pop(str(user_id), None)
-            telegram_bot.user_caption_prefs.pop(str(user_id), None)
-            
-            # Remove thumbnail
-            thumb_path = f"{user_id}.jpg"
-            if os.path.exists(thumb_path):
-                os.remove(thumb_path)
-            
-            if success:
-                await event.respond("✅ All settings reset successfully!\n\nUse /logout to remove session.")
-            else:
-                await event.respond("❌ Error occurred while resetting settings.")
-        except Exception as e:
-            await event.respond(f"❌ Reset failed: {e}")
-
-@gf.on(events.NewMessage(func=lambda e: e.sender_id in telegram_bot.pending_photos))
-async def thumbnail_handler(event):
-    """Handle thumbnail upload"""
-    user_id = event.sender_id
-    if event.photo:
-        temp_path = await event.download_media()
-        thumb_path = f'{user_id}.jpg'
-        
-        if os.path.exists(thumb_path):
-            os.remove(thumb_path)
-        
-        os.rename(temp_path, f'./{user_id}.jpg')
-        await event.respond('✅ Thumbnail saved successfully!')
-    else:
-        await event.respond('❌ Please send a photo. Try again.')
-    
-    telegram_bot.pending_photos.discard(user_id)
-
-@gf.on(events.NewMessage)
-async def user_input_handler(event):
-    """Handle user input based on current session state"""
-    user_id = event.sender_id
-    
-    if user_id in telegram_bot.user_sessions:
-        session_type = telegram_bot.user_sessions[user_id]
-        
-        if session_type == 'setchat':
-            try:
-                chat_id = event.text.strip()
-                if not re.match(r'^-?\d+(/\d+)?$', chat_id):
-                    await event.respond("❌ Invalid format. Use `chat_id` or `chat_id/topic_id`.")
-                    del telegram_bot.user_sessions[user_id]
-                    return
-                await telegram_bot.db.save_user_data(user_id, "target_chat", chat_id)
-                await event.respond(f"✅ Target chat set to: `{chat_id}`")
-            except ValueError:
-                await event.respond("❌ Invalid chat ID format!")
-        elif session_type == 'setrename':
-            rename_tag = event.text.strip()
-            telegram_bot.user_rename_prefs[str(user_id)] = rename_tag
-            await telegram_bot.db.save_user_data(user_id, "rename_tag", rename_tag)
-            await event.respond(f"✅ Rename tag set to: **{rename_tag}**")
-        
-        elif session_type == 'setcaption':
-            custom_caption = event.text.strip()
-            telegram_bot.user_caption_prefs[str(user_id)] = custom_caption
-            await telegram_bot.db.save_user_data(user_id, "custom_caption", custom_caption)
-            await event.respond(f"✅ Custom caption set to:\n\n**{custom_caption}**")
-
-        elif session_type == 'setreplacement':
-            match = re.match(r"'(.+)' '(.+)'", event.text)
-            if not match:
-                await event.respond("❌ **Invalid format!**\n\nUse: `'OLD_WORD' 'NEW_WORD'`")
-            else:
-                old_word, new_word = match.groups()
-                delete_words = set(await telegram_bot.db.get_user_data(user_id, "delete_words", []))
-                
-                if old_word in delete_words:
-                    await event.respond(f"❌ '{old_word}' is in delete list and cannot be replaced.")
-                else:
-                    replacements = await telegram_bot.db.get_user_data(user_id, "replacement_words", {})
-                    replacements[old_word] = new_word
-                    await telegram_bot.db.save_user_data(user_id, "replacement_words", replacements)
-                    await event.respond(f"✅ Replacement saved:\n**'{old_word}' → '{new_word}'**")
-
-        elif session_type == 'addsession':
-            session_string = event.text.strip()
-            await odb.set_session(user_id, session_string)
-            await event.respond("✅ Session string added successfully!")
-                
-        elif session_type == 'deleteword':
-            words_to_delete = event.text.split()
-            delete_words = set(await telegram_bot.db.get_user_data(user_id, "delete_words", []))
-            delete_words.update(words_to_delete)
-            await telegram_bot.db.save_user_data(user_id, "delete_words", list(delete_words))
-            await event.respond(f"✅ Words added to delete list:\n**{', '.join(words_to_delete)}**")
-               
-        # Clear session after handling
-        del telegram_bot.user_sessions[user_id]
-
-@gf.on(events.NewMessage(incoming=True, pattern='/lock'))
-async def lock_channel_handler(event):
-    """Handle channel locking command (owner only)"""
-    if event.sender_id not in OWNER_ID:
-        await event.respond("❌ You are not authorized to use this command.")
-        return
-    
-    try:
-        channel_id = int(event.text.split(' ')[1])
-        success = await telegram_bot.db.lock_channel(channel_id)
-        
-        if success:
-            await event.respond(f"✅ Channel ID `{channel_id}` locked successfully.")
-        else:
-            await event.respond(f"❌ Failed to lock channel ID `{channel_id}`.")
-    except (ValueError, IndexError):
-        await event.respond("❌ **Invalid command format.**\n\nUse: `/lock CHANNEL_ID`")
-    except Exception as e:
-        await event.respond(f"❌ Error: {str(e)}")
-
 # Main message handler function (integration point with existing get_msg function)
 async def get_msg(userbot, sender, edit_id, msg_link, i, message):
     """Main integration function - enhanced version of original get_msg"""
     await telegram_bot.handle_message_download(userbot, sender, edit_id, msg_link, i, message)
 
-logger.info("✅ Smart Telegram Bot initialized successfully!")
+logger.info("✅ Smart Telegram Bot engine initialized successfully!")
+
 logger.info(f"📊 Features loaded:")
 logger.info(f"   • Database: {'✅' if telegram_bot.db else '❌'}")
 logger.info(f"   • Pro Client (4GB): {'✅' if telegram_bot.pro_client else '❌'}")
