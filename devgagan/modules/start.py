@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # --- START COMMAND ---
 @app.on_message(filters.command("start") & filters.private)
-async def start_handler(client, message):
+async def start_handler(client, message, edit=False):
     """Modern start command for personal use."""
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")],
@@ -16,7 +16,38 @@ async def start_handler(client, message):
         [InlineKeyboardButton("❓ Help", callback_data="open_help")]
     ])
     
-    await message.reply(
+    text = (
+        "👋 **Welcome to SRC-V2 Elite!**\n\n"
+        "Your high-performance personal content engine is ready.\n\n"
+        "**Quick Start:**\n"
+        "• Send a Telegram post link to save it\n"
+        "• Use /batch for bulk range extraction\n"
+        "• Use /batch_txt for recovery from logs\n"
+        "• Use /login for private channels\n\n"
+        "**__Powered by Team SPY__**"
+    )
+    
+    if edit:
+        try:
+            await message.edit(text, reply_markup=keyboard)
+        except Exception:
+            await message.reply(text, reply_markup=keyboard)
+    else:
+        await message.reply(text, reply_markup=keyboard)
+
+@app.on_callback_query(filters.regex("open_start"))
+async def cb_start(client, callback_query):
+    await start_handler(client, callback_query.message, edit=True)
+
+
+@app.on_callback_query(filters.regex("open_start"))
+async def cb_start(client, callback_query):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")],
+        [InlineKeyboardButton("📊 Status", callback_data="open_status")],
+        [InlineKeyboardButton("❓ Help", callback_data="open_help")]
+    ])
+    await callback_query.message.edit(
         "👋 **Welcome to SRC-V2 Elite!**\n\n"
         "Your high-performance personal content engine is ready.\n\n"
         "**Quick Start:**\n"
@@ -27,6 +58,12 @@ async def start_handler(client, message):
         "**__Powered by Team SPY__**",
         reply_markup=keyboard
     )
+
+
+@app.on_callback_query(filters.regex("open_help"))
+async def cb_help(client, callback_query):
+    await show_help_page(callback_query.message, edit=True)
+
 
 # --- HELP COMMAND ---
 @app.on_message(filters.command("help") & filters.private)
