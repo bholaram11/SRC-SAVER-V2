@@ -1,2 +1,2 @@
-# Plans module removed - not needed for personal use.
-# This file is kept as a placeholder to avoid import errors.
+# REDUNDANT FILE - Logic removed for SRC-V2 Elite specialization.
+# This file is no longer used and can be safely deleted.
