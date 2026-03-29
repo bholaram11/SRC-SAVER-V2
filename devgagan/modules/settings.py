@@ -113,11 +113,17 @@ async def show_settings_menu(user_id, message, edit=False):
         f"🔍 **Regex Filters:** `{regex_count} active`\n"
     )
     
+    thumb_exists = os.path.exists(f"{user_id}.jpg")
+    menu_text += f"🖼️ **Custom Thumbnail:** `{'✅ Set' if thumb_exists else '❌ Not Set'}`\n"
+
+    
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📡 Set Target Chat", callback_data="set_target"),
          InlineKeyboardButton("🏷️ Set Rename Tag", callback_data="set_rename")],
         [InlineKeyboardButton("📝 Set Caption", callback_data="set_caption"),
          InlineKeyboardButton("🔍 Set Regex", callback_data="set_regex")],
+        [InlineKeyboardButton("🖼️ Set Thumb", callback_data="set_thumb"),
+         InlineKeyboardButton("🗑️ Remove Thumb", callback_data="rem_thumb")],
         [InlineKeyboardButton("🗑️ Reset All", callback_data="reset_settings")],
         [InlineKeyboardButton("🔙 Back to Start", callback_data="open_start")]
     ])
@@ -141,8 +147,20 @@ async def cb_set_pref(client, callback_query: CallbackQuery):
         "target": "📡 **Set Target Chat**\n\nSend the Target Chat ID (starting with -100).\nExample: `-100123456789` or `ChatID/TopicID`.",
         "rename": "🏷️ **Set Rename Tag**\n\nSend the text you want to append/prepend to filenames.",
         "caption": "📝 **Set Custom Caption**\n\nSend your caption template. Use `{filename}` as a placeholder for the original name.",
-        "regex": "🔍 **Set Regex Filters**\n\nSend patterns in `pattern|replacement` format.\nOne per line. Example:\n`https?://\\S+|[LINK REMOVED]`"
+        "regex": "🔍 **Set Regex Filters (Pro Cleaning)**\n\n"
+                 "Use this to clean links, usernames, or specific patterns from captions.\n\n"
+                 "**Format:** `pattern|replacement` (One per line)\n"
+                 "• Use `|` as a separator.\n"
+                 "• If you leave the replacement empty, the pattern will be **DELETED**.\n\n"
+                 "**Examples:**\n"
+                 "1️⃣ `https?://\\S+|` (Removes all web links)\n"
+                 "2️⃣ `@\\S+|` (Removes all @usernames)\n"
+                 "3️⃣ `Batch \\d+|Season` (Replaces 'Batch 1' with 'Season')\n"
+                 "4️⃣ `(?i)Join Us|` (Removes 'Join Us' case-insensitively)",
+        "thumb": "🖼️ **Set Custom Thumbnail**\n\nPlease upload a **Photo** to set it as your persistent thumbnail."
     }
+
+
     
     user_states[user_id] = f"awaiting_{pref}"
     
@@ -150,6 +168,18 @@ async def cb_set_pref(client, callback_query: CallbackQuery):
         f"{instr[pref]}\n\n✨ _Type /cancel to abort._",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="open_settings")]])
     )
+
+@app.on_callback_query(filters.regex("rem_thumb"))
+async def cb_rem_thumb(client, callback_query: CallbackQuery):
+    user_id = callback_query.message.chat.id
+    thumb_path = f"{user_id}.jpg"
+    if os.path.exists(thumb_path):
+        os.remove(thumb_path)
+        await callback_query.answer("✅ Thumbnail removed successfully!", show_alert=True)
+    else:
+        await callback_query.answer("❌ No thumbnail found to remove.", show_alert=True)
+    await show_settings_menu(user_id, callback_query.message, edit=True)
+
 
 @app.on_callback_query(filters.regex("reset_settings"))
 async def cb_reset_settings(client, callback_query: CallbackQuery):
@@ -192,6 +222,7 @@ async def handle_settings_input(client, message):
             await message.reply("✅ Custom caption updated!")
             
         elif state == "awaiting_regex":
+            # Format: 'pattern|replacement' or just 'pattern' to delete
             lines = message.text.strip().split("\n")
             patterns = []
             for line in lines:
@@ -199,10 +230,23 @@ async def handle_settings_input(client, message):
                     pat, repl = line.split("|", 1)
                     patterns.append([pat.strip(), repl.strip()])
                 else:
+                    # If no | separator, assume user wants to delete the pattern
                     patterns.append([line.strip(), ""])
             
             await db.db.update_one({"_id": user_id}, {"$set": {"regex_patterns": patterns}})
-            await message.reply(f"✅ {len(patterns)} Regex filters updated!")
+            await message.reply(f"✅ Successfully updated {len(patterns)} Regex filters!\n\n"
+                              "Bot will now apply these patterns to all future captions/filenames.")
+
+        
+        elif state == "awaiting_thumb":
+            if message.photo:
+                # Use Pyrogram's download method
+                await message.download(file_name=f"{user_id}.jpg")
+                await message.reply("✅ Custom thumbnail saved successfully!")
+            else:
+                await message.reply("❌ Please send a **Photo** to set it as a thumbnail.")
+                return # Don't clear state if wrong format sent
+
 
     except Exception as e:
         await message.reply(f"❌ **Error:** `{str(e)}`\nPlease ensure you sent the correct format.")
