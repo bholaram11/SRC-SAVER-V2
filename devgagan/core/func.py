@@ -63,6 +63,9 @@ PROGRESS_BAR = """\n
 async def progress_bar(current, total, ud_type, message, start):
     """Throttled progress bar - only updates every PROGRESS_UPDATE_INTERVAL seconds."""
     from config import PROGRESS_UPDATE_INTERVAL
+    from devgagan.core.get_func import telegram_bot
+    from devgagan.modules.main import throttle
+    
     now = time.time()
     diff = now - start
     
@@ -77,11 +80,25 @@ async def progress_bar(current, total, ud_type, message, start):
         elapsed_time = TimeFormatter(milliseconds=elapsed_time)
         estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
 
+        # Build Elite Progress UI
         progress = "{0}{1}".format(
             ''.join(["♦" for i in range(math.floor(percentage / 10))]),
             ''.join(["◇" for i in range(10 - math.floor(percentage / 10))]))
 
-        tmp = progress + PROGRESS_BAR.format( 
+        # Get pipeline stats
+        q_stats = telegram_bot.upload_queue.get_status()
+        t_stats = throttle.get_stats()
+        
+        # Determine status emoji
+        status_emoji = "▶️" 
+        if q_stats['downloads_paused']:
+            status_emoji = "⏸️ Throttled"
+        elif t_stats['current_delay'] > t_stats['base_delay']:
+            status_emoji = "⏳ Slowing"
+
+        status_line = f"│ 🚦 **Queue:** `{q_stats['pending_count']} files ({q_stats['pending_size_mb']}MB)`\n│ ⏱️ **Delay:** `{t_stats['current_delay']}s ({status_emoji})`"
+
+        tmp = progress + f"\n\n{status_line}\n" + PROGRESS_BAR.format( 
             round(percentage, 2),
             humanbytes(current),
             humanbytes(total),
@@ -90,7 +107,7 @@ async def progress_bar(current, total, ud_type, message, start):
         )
         try:
             await message.edit(
-                text="{}\\n│ {}".format(ud_type, tmp),)             
+                text="{}\n│ {}".format(ud_type, tmp),)             
         except Exception:
             pass
 
