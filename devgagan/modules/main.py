@@ -5,9 +5,10 @@ import asyncio
 import logging
 from pyrogram import filters, Client
 from devgagan import app, userrbot
-from config import API_ID, API_HASH, BATCH_LIMIT, OWNER_ID, DEFAULT_SESSION, INTER_FILE_DELAY
+from config import API_ID, API_HASH, BATCH_LIMIT, OWNER_ID, DEFAULT_SESSION
 from devgagan.core.get_func import get_msg, telegram_bot
 from devgagan.core.func import *
+from devgagan.core.adaptive_throttle import AdaptiveThrottle
 from devgagan.core.mongo import db
 from pyrogram.errors import FloodWait
 from datetime import datetime, timedelta
@@ -20,6 +21,8 @@ async def generate_random_name(length=8):
 
 users_loop = {}  # True = running, False = graceful cancel requested
 force_stop = {}  # True = force stop requested
+throttle = AdaptiveThrottle()  # Adaptive inter-file delay
+failed_links = {} # {user_id: [link1, link2, ...]}
 
 async def process_and_upload_link(userbot, user_id, msg_id, link, retry_count, message):
     try:
@@ -239,6 +242,7 @@ async def batch_link(_, message):
     users_loop[user_id] = True
     force_stop[user_id] = False
     processed_count = 0
+    failed_links[user_id] = [] # Initialize failed links list for this batch
 
     # Save batch state to MongoDB for auto-resume
     batch_state = {
@@ -314,8 +318,9 @@ async def batch_link(_, message):
                         await db.update_batch_progress(user_id, msg_id, processed_count)
                         
                         await pin_msg.edit(f"⚡ Processing: {processed_count}/{len(saved_msg_ids)}", reply_markup=keyboard)
-                        await asyncio.sleep(INTER_FILE_DELAY)
+                        await asyncio.sleep(throttle.get_delay())
                 except FloodWait as fw:
+                    throttle.report_flood_wait(fw.value)
                     logger.warning(f"FloodWait during process: {fw.value}s")
                     await pin_msg.edit(f"⏳ FloodWait: {fw.value}s. Waiting...")
                     await asyncio.sleep(fw.value + 5)
@@ -367,13 +372,19 @@ async def batch_link(_, message):
                                     f"⚡ Processing: {processed_count}/{total_to_check}",
                                     reply_markup=keyboard
                                 )
-                                await asyncio.sleep(INTER_FILE_DELAY)
+                                await asyncio.sleep(throttle.get_delay())
+                            else:
+                                failed_links[user_id].append(url)
+                        else:
+                            failed_links[user_id].append(url)
                     except FloodWait as fw:
+                        throttle.report_flood_wait(fw.value)
                         logger.warning(f"FloodWait: {fw.value}s")
                         await pin_msg.edit_text(f"⏳ FloodWait: {fw.value}s. Waiting...")
                         await asyncio.sleep(fw.value + 5)
                     except Exception as e:
                         logger.error(f"Batch item error: {e}")
+                        failed_links[user_id].append(url)
                 else:
                     break
 
@@ -381,6 +392,19 @@ async def batch_link(_, message):
                 await pin_msg.edit_text(f"✅ Batch completed! {processed_count} messages 🎉", reply_markup=keyboard)
                 await app.send_message(message.chat.id, "Batch completed successfully! 🎉")
             
+            # Send failed links report if any
+            if failed_links.get(user_id):
+                report_file = f"failed_batch_{user_id}.txt"
+                with open(report_file, "w") as f:
+                    f.write("\n".join(failed_links[user_id]))
+                await app.send_document(
+                    message.chat.id, 
+                    report_file, 
+                    caption=f"❌ **Batch finished with {len(failed_links[user_id])} errors.**\n\nUse `/batch_txt` and upload this file to retry only these links."
+                )
+                if os.path.exists(report_file):
+                    os.remove(report_file)
+
             await db.clear_batch_state(user_id)
         except Exception as e:
             logger.error(f"Batch error: {e}")
@@ -440,6 +464,82 @@ async def batch_cancel_callback(_, callback_query):
     else:
         await callback_query.answer("No active batch.", show_alert=True)
 
+
+@app.on_message(filters.command("batch_txt") & filters.private)
+async def batch_txt_handler(client, message):
+    user_id = message.chat.id
+    
+    if users_loop.get(user_id, False):
+        await message.reply("You already have an ongoing process.")
+        return
+
+    try:
+        txt_msg = await app.ask(user_id, "Please upload the `.txt` file containing Telegram links (one per line).", timeout=60)
+        if not txt_msg.document or not txt_msg.document.file_name.endswith(".txt"):
+            await message.reply("❌ Invalid file. Please upload a `.txt` file.")
+            return
+        
+        file_path = await txt_msg.download()
+        with open(file_path, "r") as f:
+            links = [line.strip() for line in f.readlines() if line.strip()]
+        
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        if not links:
+            await message.reply("❌ The file is empty.")
+            return
+
+        if len(links) > 2000:
+            await message.reply("❌ Limit exceeded. Max 2000 links per TXT.")
+            return
+
+        # Start Batch from TXT
+        users_loop[user_id] = True
+        failed_links[user_id] = []
+        processed_count = 0
+        total = len(links)
+        
+        userbot = await initialize_userbot(user_id)
+        pin_msg = await message.reply(f"📦 **TXT Batch Started**\nTotal: {total}\n\n**Powered by Team SPY**")
+        
+        for link in links:
+            if not users_loop.get(user_id):
+                break
+            
+            # Extract ID from link for process_and_upload_link
+            try:
+                parts = link.split("/")
+                msg_id = int(parts[-1])
+                
+                msg_placeholder = await app.send_message(user_id, "Processing...")
+                if await process_and_upload_link(userbot, user_id, msg_placeholder.id, link, 0, message):
+                    processed_count += 1
+                else:
+                    failed_links[user_id].append(link)
+            except Exception:
+                failed_links[user_id].append(link)
+
+            await pin_msg.edit(f"📦 **TXT Batch: {processed_count}/{total}**")
+            await asyncio.sleep(throttle.get_delay())
+
+        await message.reply(f"✅ TXT Batch completed! {processed_count} success, {len(failed_links[user_id])} failed.")
+        
+        if failed_links.get(user_id):
+            report_file = f"retry_failed_{user_id}.txt"
+            with open(report_file, "w") as f:
+                f.write("\n".join(failed_links[user_id]))
+            await app.send_document(user_id, report_file, caption="Re-failed links log.")
+            if os.path.exists(report_file):
+                os.remove(report_file)
+
+    except asyncio.TimeoutError:
+        await message.reply("⏰ Timed out.")
+    except Exception as e:
+        logger.error(f"TXT Batch error: {e}")
+        await message.reply(f"Error: {e}")
+    finally:
+        users_loop.pop(user_id, None)
 
 @app.on_callback_query(filters.regex("batch_stop"))
 async def batch_stop_callback(_, callback_query):
@@ -556,8 +656,9 @@ async def auto_resume_batch():
                             processed_count += 1
                             await db.update_batch_progress(user_id, msg_id, processed_count)
                             await pin_msg.edit(f"⚡ Resumed: {processed_count} processed", reply_markup=keyboard)
-                            await asyncio.sleep(INTER_FILE_DELAY)
+                            await asyncio.sleep(throttle.get_delay())
                     except FloodWait as fw:
+                        throttle.report_flood_wait(fw.value)
                         logger.warning(f"FloodWait during resume: {fw.value}s")
                         await pin_msg.edit(f"⏳ FloodWait: {fw.value}s. Waiting...")
                         await asyncio.sleep(fw.value + 5)
@@ -602,8 +703,9 @@ async def auto_resume_batch():
                                     f"⚡ Resumed: {processed_count} processed",
                                     reply_markup=keyboard
                                 )
-                                await asyncio.sleep(INTER_FILE_DELAY)
+                                await asyncio.sleep(throttle.get_delay())
                     except FloodWait as fw:
+                        throttle.report_flood_wait(fw.value)
                         logger.warning(f"FloodWait during resume: {fw.value}s")
                         await pin_msg.edit_text(f"⏳ FloodWait: {fw.value}s. Waiting...")
                         await asyncio.sleep(fw.value + 5)
