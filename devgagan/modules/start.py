@@ -1,98 +1,82 @@
 import logging
 from pyrogram import filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from devgagan import app
 from config import OWNER_ID
-from pyrogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 
 logger = logging.getLogger(__name__)
 
-@app.on_message(filters.command("set"))
-async def set_commands(_, message):
+# --- START COMMAND ---
+@app.on_message(filters.command("start") & filters.private)
+async def start_handler(client, message):
+    """Modern start command for personal use."""
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")],
+        [InlineKeyboardButton("📊 Status", callback_data="open_status")],
+        [InlineKeyboardButton("❓ Help", callback_data="open_help")]
+    ])
+    
+    await message.reply(
+        "👋 **Welcome to SRC-V2 Elite!**\n\n"
+        "Your high-performance personal content engine is ready.\n\n"
+        "**Quick Start:**\n"
+        "• Send a Telegram post link to save it\n"
+        "• Use /batch for bulk range extraction\n"
+        "• Use /batch_txt for recovery from logs\n"
+        "• Use /login for private channels\n\n"
+        "**__Powered by Team SPY__**",
+        reply_markup=keyboard
+    )
+
+# --- HELP COMMAND ---
+@app.on_message(filters.command("help") & filters.private)
+async def help_handler(client, message):
+    await show_help_page(message)
+
+# --- SET COMMANDS ---
+@app.on_message(filters.command("set") & filters.private)
+async def set_commands(client, message):
     if message.from_user.id not in OWNER_ID:
-        await message.reply("You are not authorized to use this command.")
         return
      
-    await app.set_bot_commands([
+    await client.set_bot_commands([
         BotCommand("start", "🚀 Start the bot"),
-        BotCommand("batch", "📦 Extract in bulk"),
-        BotCommand("login", "🔑 Login for private channels"),
-        BotCommand("logout", "🚪 Logout from session"),
-        BotCommand("dl", "🎬 Download videos from 30+ sites"),
-        BotCommand("adl", "🎵 Download audio from 30+ sites"),
-        BotCommand("settings", "⚙️ Personalize settings"),
-        BotCommand("stats", "📊 Bot statistics"),
-        BotCommand("speedtest", "🚅 Server speed test"),
-        BotCommand("lock", "🔒 Protect channel from extraction"),
-        BotCommand("cancel", "🛑 Graceful cancel (finish current file)"),
-        BotCommand("stop", "⛔ Force stop (immediate)"),
-        BotCommand("resume", "🔄 Resume interrupted batch"),
-        BotCommand("help", "❓ How to use"),
-        BotCommand("session", "🧵 Generate Pyrogram V2 session"),
-        BotCommand("restart", "🔄 Restart bot (owner only)")
+        BotCommand("batch", "📦 Bulk range extraction"),
+        BotCommand("batch_txt", "📄 Batch from TXT file"),
+        BotCommand("status", "📊 Live pipeline status"),
+        BotCommand("settings", "⚙️ Configure preferences"),
+        BotCommand("login", "🔑 Session login"),
+        BotCommand("logout", "🚪 Session logout"),
+        BotCommand("dl", "🎬 Download external video"),
+        BotCommand("adl", "🎵 Download external audio"),
+        BotCommand("cancel", "🛑 Graceful stop"),
+        BotCommand("stop", "⛔ Force stop"),
+        BotCommand("restart", "🔄 Restart bot")
     ])
- 
-    await message.reply("✅ Commands configured successfully!")
+    await message.reply("✅ **Elite Commands Configured!**")
 
-
-help_pages = [
-    (
-        "📝 **Bot Commands (1/2)**:\n\n"
-        "1. **/batch** - Bulk extraction of posts\n"
-        "2. **/login** - Login for private channel access\n"
-        "3. **/logout** - Logout from session\n"
-        "4. **/dl link** - Download videos\n"
-        "5. **/adl link** - Download audio\n"
-        "6. **/settings** - Configure bot settings\n"
-        "7. **/lock** - Lock channel from extraction\n"
-        "8. **/cancel** - Graceful stop (finish current file)\n"
-        "9. **/stop** - Force stop (immediate)\n"
-    ),
-    (
-        "📝 **Bot Commands (2/2)**:\n\n"
-        "10. **/stats** - Bot statistics\n"
-        "11. **/speedtest** - Server speed test\n"
-        "12. **/session** - Generate Pyrogram V2 session\n"
-        "13. **/restart** - Restart bot (owner only)\n\n"
-        "**Settings options:**\n"
-        "> SETCHATID: Upload to channel/group\n"
-        "> SETRENAME: Custom rename tag\n"
-        "> CAPTION: Custom caption\n"
-        "> REPLACEWORDS: Word replacement\n"
-        "> RESET: Reset to defaults\n\n"
+# --- UTILS ---
+async def show_help_page(message, edit=False):
+    help_text = (
+        "❓ **Elite Bot Guide**\n\n"
+        "1️⃣ **Link Extraction**: Just send any `t.me` link.\n"
+        "2️⃣ **Batch Mode**: Use `/batch` to extract a range of messages.\n"
+        "3️⃣ **TXT Batch**: Use `/batch_txt` to recover failed links from logs.\n"
+        "4️⃣ **Private Channels**: Use `/login` first to bridge the connection.\n"
+        "5️⃣ **Settings**: Use `/settings` to set Tag, Caption, and Regex Filters.\n"
+        "6️⃣ **Status**: Use `/status` to monitor the pipeline health.\n\n"
+        "**Pro Features:**\n"
+        "• **Adaptive Throttle**: Prevents FloodWaits automatically.\n"
+        "• **Parallel Downloader**: Speeds up slow Telegram DCs.\n"
+        "• **Auto-Resume**: Continues work after restarts.\n\n"
         "**__Powered by Team SPY__**"
     )
-]
- 
- 
-async def send_or_edit_help_page(_, message, page_number):
-    if page_number < 0 or page_number >= len(help_pages):
-        return
- 
-    prev_button = InlineKeyboardButton("◀️ Previous", callback_data=f"help_prev_{page_number}")
-    next_button = InlineKeyboardButton("Next ▶️", callback_data=f"help_next_{page_number}")
- 
-    buttons = []
-    if page_number > 0:
-        buttons.append(prev_button)
-    if page_number < len(help_pages) - 1:
-        buttons.append(next_button)
- 
-    keyboard = InlineKeyboardMarkup([buttons])
-    await message.delete()
-    await message.reply(help_pages[page_number], reply_markup=keyboard)
- 
- 
-@app.on_message(filters.command("help"))
-async def help_cmd(client, message):
-    await send_or_edit_help_page(client, message, 0)
- 
- 
-@app.on_callback_query(filters.regex(r"help_(prev|next)_(\d+)"))
-async def on_help_navigation(client, callback_query):
-    action, page_number = callback_query.data.split("_")[1], int(callback_query.data.split("_")[2])
-    if action == "prev":
-        page_number -= 1
-    elif action == "next":
-        page_number += 1
-    await send_or_edit_help_page(client, callback_query.message, page_number)
-    await callback_query.answer()
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="open_start")]])
+    if edit:
+        await message.edit(help_text, reply_markup=keyboard)
+    else:
+        await message.reply(help_text, reply_markup=keyboard)
+
+# Always verified for personal use
+async def is_user_verified(user_id):
+    return True
