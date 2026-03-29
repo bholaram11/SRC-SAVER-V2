@@ -97,9 +97,11 @@ async def show_settings_menu(user_id, message, edit=False):
     # Fetch current settings from DB
     data = await db.get_data(user_id) or {}
     
-    target_chat = data.get("chat_id", "Not Set")
+    target_chat = data.get("chat_id", "Personal Chat (DM)")
     rename_tag = data.get("rename_tag", "Not Set")
     custom_caption = data.get("caption", "Not Set")
+    upload_method = data.get("upload_method", "Pyrogram")
+
     
     # regex_patterns is a list of [pat, repl]
     regex_count = len(data.get("regex_patterns", []))
@@ -111,6 +113,8 @@ async def show_settings_menu(user_id, message, edit=False):
         f"🏷️ **Rename Tag:** `{rename_tag}`\n"
         f"📝 **Custom Caption:** `{custom_caption}`\n"
         f"🔍 **Regex Filters:** `{regex_count} active`\n"
+        f"📤 **Upload Method:** `{upload_method}`\n"
+
     )
     
     thumb_exists = os.path.exists(f"{user_id}.jpg")
@@ -124,9 +128,11 @@ async def show_settings_menu(user_id, message, edit=False):
          InlineKeyboardButton("🔍 Set Regex", callback_data="set_regex")],
         [InlineKeyboardButton("🖼️ Set Thumb", callback_data="set_thumb"),
          InlineKeyboardButton("🗑️ Remove Thumb", callback_data="rem_thumb")],
+        [InlineKeyboardButton("📤 Change Upload Method", callback_data="set_method")],
         [InlineKeyboardButton("🗑️ Reset All", callback_data="reset_settings")],
         [InlineKeyboardButton("🔙 Back to Start", callback_data="open_start")]
     ])
+
     
     if edit:
         try:
@@ -186,11 +192,24 @@ async def cb_reset_settings(client, callback_query: CallbackQuery):
     user_id = callback_query.message.chat.id
     await db.remove_channel(user_id)
     await db.remove_caption(user_id)
-    # Clear regex and rename tag manually as db.py might not have specific methods for all
-    await db.db.update_one({"_id": user_id}, {"$unset": {"regex_patterns": "", "rename_tag": ""}})
+    # Clear regex and rename tag manually
+    await db.db.update_one({"_id": user_id}, {"$unset": {"regex_patterns": "", "rename_tag": "", "upload_method": ""}})
     
     await callback_query.answer("✅ Settings reset to defaults!", show_alert=True)
     await show_settings_menu(user_id, callback_query.message, edit=True)
+
+@app.on_callback_query(filters.regex("set_method"))
+async def cb_set_method(client, callback_query: CallbackQuery):
+    user_id = callback_query.message.chat.id
+    current = await db.db.find_one({"_id": user_id})
+    current_method = current.get("upload_method", "Pyrogram") if current else "Pyrogram"
+    
+    new_method = "Telethon" if current_method == "Pyrogram" else "Pyrogram"
+    await db.db.update_one({"_id": user_id}, {"$set": {"upload_method": new_method}})
+    
+    await callback_query.answer(f"✅ Upload method switched to {new_method}!", show_alert=False)
+    await show_settings_menu(user_id, callback_query.message, edit=True)
+
 
 # --- MESSAGE HANDLER FOR SETTINGS INPUT ---
 
