@@ -78,12 +78,12 @@ async def cb_open_help(client, callback_query: CallbackQuery):
     from devgagan.modules.start import show_help_page
     await show_help_page(callback_query.message, edit=True)
 
-@on_callback_query(filters.regex("open_status"))
+@app.on_callback_query(filters.regex("open_status"))
 async def cb_open_status(client, callback_query: CallbackQuery):
     await status_command(client, callback_query.message)
     await callback_query.answer()
 
-@on_callback_query(filters.regex("open_start"))
+@app.on_callback_query(filters.regex("open_start"))
 async def cb_open_start(client, callback_query: CallbackQuery):
     from devgagan.modules.start import start_handler
     await start_handler(client, callback_query.message)
