@@ -122,6 +122,111 @@ async def process_special_links(userbot, user_id, msg, link):
     await msg.edit_text("Invalid link...")
 
 
+async def _run_normal_batch_loop(user_id, userbot, pin_msg, keyboard, start_link, start_msg_id, end_msg_id, processed_count, total_to_check, message):
+    base_link = start_link.rsplit('/', 1)[0]
+    current_id = start_msg_id
+    
+    while current_id <= end_msg_id:
+        if not users_loop.get(user_id):
+            await pin_msg.edit_text("🛑 Graceful stop. Batch paused.", reply_markup=keyboard)
+            break
+        if force_stop.get(user_id):
+            await pin_msg.edit_text("⛔ Force stopped!", reply_markup=keyboard)
+            break
+
+        link = f"{base_link}/{current_id}"
+        msg_placeholder = await app.send_message(user_id, "...", disable_notification=True)
+        
+        try:
+            success = await process_and_upload_link(userbot, user_id, msg_placeholder.id, link, 0, message)
+            if success:
+                processed_count += 1
+            else:
+                failed_links.setdefault(user_id, []).append(link)
+
+            # Update progress
+            processed_in_run = current_id - start_msg_id + 1
+            await pin_msg.edit_text(
+                f"Batch in progress ⚡\n"
+                f"Checked: {processed_in_run}/{total_to_check}\n"
+                f"Saved: {processed_count}\n"
+                f"Last checked: {link}\n\n"
+                f"**Powered by Team SPY**",
+                reply_markup=keyboard
+            )
+            
+            # Update batch state for resume
+            await db.db.update_one(
+                {"user_id": user_id, "status": "active"}, 
+                {"$set": {"last_processed_id": current_id, "processed_count": processed_count}}
+            )
+
+        except FloodWait as fw:
+            logger.warning(f"FloodWait in batch: {fw.value}s. Sleeping...")
+            await pin_msg.edit_text(f"⏳ FloodWait: sleeping for {fw.value}s...", reply_markup=keyboard)
+            await asyncio.sleep(fw.value + 5)
+            continue # Retry the same ID
+        except Exception as e:
+            logger.error(f"Error processing link {link}: {e}")
+            failed_links.setdefault(user_id, []).append(link)
+        
+        current_id += 1
+        await asyncio.sleep(1)
+
+    return processed_count
+
+async def _run_topic_batch_loop(user_id, userbot, pin_msg, keyboard, chat_id, msg_ids, processed_count, total_to_check, message):
+    message_for_upload = message if message else pin_msg
+    
+    i = 0
+    while i < len(msg_ids):
+        msg_id = msg_ids[i]
+        if not users_loop.get(user_id):
+            await pin_msg.edit_text("🛑 Graceful stop. Batch paused.", reply_markup=keyboard)
+            break
+        if force_stop.get(user_id):
+            await pin_msg.edit_text("⛔ Force stopped!", reply_markup=keyboard)
+            break
+
+        chat_id_str = str(chat_id).replace('-100', '')
+        link = f"https://t.me/c/{chat_id_str}/{msg_id}"
+        msg_placeholder = await app.send_message(user_id, "...", disable_notification=True)
+        
+        try:
+            success = await process_and_upload_link(userbot, user_id, msg_placeholder.id, link, 0, message_for_upload)
+            if success:
+                processed_count += 1
+            else:
+                failed_links.setdefault(user_id, []).append(link)
+
+            await pin_msg.edit_text(
+                f"Topic Batch in progress ⚡\n"
+                f"Processed: {i + 1}/{total_to_check}\n"
+                f"Saved: {processed_count}\n"
+                f"Last checked: {link}\n\n"
+                f"**Powered by Team SPY**",
+                reply_markup=keyboard
+            )
+            
+            await db.db.update_one(
+                {"user_id": user_id, "status": "active"}, 
+                {"$set": {"last_processed_id": msg_id, "processed_count": processed_count}}
+            )
+
+        except FloodWait as fw:
+            logger.warning(f"FloodWait in topic batch: {fw.value}s. Sleeping...")
+            await pin_msg.edit_text(f"⏳ FloodWait: sleeping for {fw.value}s...", reply_markup=keyboard)
+            await asyncio.sleep(fw.value + 5)
+            continue # Retry same message
+        except Exception as e:
+            logger.error(f"Error processing link {link}: {e}")
+            failed_links.setdefault(user_id, []).append(link)
+        
+        i += 1
+        await asyncio.sleep(1)
+
+    return processed_count
+
 @app.on_message(filters.command("batch") & filters.private)
 async def batch_link(_, message):
     user_id = message.chat.id
@@ -298,7 +403,7 @@ async def batch_link(_, message):
             await pin_msg.edit(f"✅ Found {len(valid_msg_ids)} messages. Processing...", reply_markup=keyboard)
             saved_msg_ids = await db.get_topic_msg_ids(user_id)
 
-            processed_count = await _run_topic_batch_loop(user_id, userbot, pin_msg, keyboard, chat_id, saved_msg_ids, processed_count, len(saved_msg_ids))
+            processed_count = await _run_topic_batch_loop(user_id, userbot, pin_msg, keyboard, chat_id, saved_msg_ids, processed_count, len(saved_msg_ids), message)
 
             if users_loop.get(user_id) and not force_stop.get(user_id):
                 await pin_msg.edit(f"✅ Batch completed! Processed {processed_count} messages. 🎉", reply_markup=keyboard)
@@ -597,7 +702,7 @@ async def auto_resume_batch():
                 reply_markup=keyboard
             )
             
-            processed_count = await _run_topic_batch_loop(user_id, userbot, pin_msg, keyboard, chat_id, unprocessed_ids, processed_count, len(unprocessed_ids))
+            processed_count = await _run_topic_batch_loop(user_id, userbot, pin_msg, keyboard, chat_id, unprocessed_ids, processed_count, len(unprocessed_ids), pin_msg)
 
             if users_loop.get(user_id) and not force_stop.get(user_id):
                 await pin_msg.edit(f"✅ Batch resumed and completed! {processed_count} total 🎉")
