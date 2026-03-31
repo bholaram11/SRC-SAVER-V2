@@ -6,6 +6,7 @@ import logging
 from pyrogram import filters, Client
 from devgagan import app, userrbot
 from config import API_ID, API_HASH, BATCH_LIMIT, OWNER_ID, DEFAULT_SESSION
+from devgagan.core.get_func import telegram_bot
 from devgagan.core.func import *
 from devgagan.core.flood_prevention import flood_preventor
 from devgagan.core.mongo import db
@@ -610,7 +611,7 @@ async def auto_resume_batch():
             await pin_msg.pin(both_sides=True)
             
             try:
-                processed_count = await _run_normal_batch_loop(user_id, userbot, pin_msg, keyboard, start_link, resume_from, end_msg_id, processed_count, end_msg_id - start_msg_id + 1, None)
+                processed_count = await _run_normal_batch_loop(user_id, userbot, pin_msg, keyboard, start_link, resume_from, end_msg_id, processed_count, end_msg_id - start_msg_id + 1, pin_msg)
 
                 if users_loop.get(user_id) and not force_stop.get(user_id):
                     await pin_msg.edit_text(f"✅ Batch resumed and completed! {processed_count} total 🎉")
